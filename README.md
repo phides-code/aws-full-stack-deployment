@@ -1,30 +1,30 @@
 # AWS Full-Stack Deployment Template
 
-This project provides a set of scripts and configuration files to automate the deployment and teardown of a full-stack application on AWS. It includes example IAM policies, API Gateway, S3, and CloudFront configurations, as well as a backend with a default database table, making it easy to bootstrap a secure and scalable cloud environment.
+This project provides a set of scripts and configuration files to automate the deployment and teardown of a full-stack application on AWS. It deploys a Go backend and a React-Redux frontend, fully integrated with AWS managed services for a modern, production-ready cloud stack.
+
+## What Does This Deploy?
+
+-   **Backend:**
+    -   Go service deployed as a Lambda function
+    -   API Gateway for RESTful endpoints
+    -   DynamoDB table (default: `Bananas`, customizable)
+    -   Deployed using an AWS CloudFormation stack
+    -   Automated build and deployment via GitHub Actions
+-   **Frontend:**
+    -   TypeScript React + Redux application
+    -   Full basic CRUD interface for the database table
+    -   Basic SigV4 request signing for secure API calls
+    -   Hosted on S3 and served via CloudFront
+    -   Automated build and deployment via GitHub Actions
 
 ## Features
 
 -   Automated setup and teardown scripts
 -   Example IAM and trust policies
--   API Gateway and S3 configuration templates
--   CloudFront OAC (Origin Access Control) example
+-   API Gateway, S3, and CloudFront configuration templates
 -   Backend with a default database table named `Bananas` (can be renamed/customized)
 -   Easy customization via JSON config files
-
-## Directory Structure
-
-```
-├── delete-all.sh                # Script to delete all deployed AWS resources
-├── setup.sh                     # Script to set up all AWS resources
-├── json-files/                  # Directory containing JSON configuration files
-│   ├── api-gateway-policy.json
-│   ├── my-dist-config.json
-│   ├── oac-config.json
-│   ├── s3-policy.json
-│   ├── unauth-credentials-policy.json
-│   └── unauth-trust-policy.json
-└── README.md                    # Project documentation
-```
+-   End-to-end CI/CD with GitHub Actions for both frontend and backend
 
 ## Prerequisites
 
@@ -36,13 +36,13 @@ This project provides a set of scripts and configuration files to automate the d
 
 ## Setup Instructions
 
-1. Clone this repository:
+1.  Clone this repository:
     ```bash
     git clone <your-repo-url>
     cd aws-full-stack-deployment
     ```
-2. Review and customize the JSON files in `json-files/` as needed for your environment.
-3. Run the setup script with your desired project name (required):
+2.  Review and customize the JSON files in `json-files/` as needed for your environment.
+3.  Run the setup script with your desired project name (required):
     ```bash
     ./setup.sh <project-name>
     ```
@@ -52,6 +52,7 @@ This project provides a set of scripts and configuration files to automate the d
 
 -   The setup script will provision all necessary AWS resources as defined in the JSON files, using the project name you provide.
 -   The backend includes a default database table named `Bananas`. You can rename or customize this table as needed in your configuration.
+-   The frontend provides a basic CRUD interface and is pre-configured for SigV4 request signing.
 -   Modify the JSON files to adjust policies, permissions, or resource configurations.
 
 ## Cleanup
