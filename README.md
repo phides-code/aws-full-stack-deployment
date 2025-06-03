@@ -31,6 +31,8 @@ This project provides a set of scripts and configuration files to automate the d
 -   [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) configured with appropriate credentials
 -   Bash shell (Linux or macOS recommended)
 -   jq (for JSON processing, if used in scripts)
+-   [git](https://git-scm.com/) (for version control and repository setup)
+-   [GitHub CLI (gh)](https://cli.github.com/) (for repository creation and deployment automation)
 
 ## Setup Instructions
 
