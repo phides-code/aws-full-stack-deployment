@@ -290,6 +290,14 @@ gh secret set AWS_DISTRIBUTION --body "$distribution_id"
 gh secret set BANANAS_SERVICE_URL --body "$service_url"
 gh secret set IDENTITY_POOL_ID --body "$identity_pool_id"
 
+# Create local .env file for frontend
+echo "Creating local .env file for frontend..."
+cat <<EOF > .env
+VITE_BANANAS_SERVICE_URL=$service_url
+VITE_IDENTITY_POOL_ID=$identity_pool_id
+VITE_AWS_REGION=$AWS_REGION
+EOF
+
 ### initial commit:
 echo "Committing and pushing frontend code to GitHub..."
 git add .
