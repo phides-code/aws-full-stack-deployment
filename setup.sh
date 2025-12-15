@@ -77,7 +77,7 @@ echo "Cloning backend template repo..."
 npx degit phides-code/go-dynamodb-service-template "$service_name"
 
 # Move into the service folder
-cd "$lowercase_project_name-bananas-service" || exit
+cd "$service_name" || exit
 
 echo "Replacing template variables in backend files..."
 find . -type f -exec sed -i "s/Appname/$camel_case_project_name/g" {} +
@@ -354,7 +354,6 @@ echo "All variables above can be used for further automation or manual configura
 # copy delete-all.sh from the parent directory
 echo "Preparing delete-all.sh for future cleanup automation..."
 cp ../delete-all.sh .
-chmod +x delete-all.sh
 
 # Prepare variable declarations for delete-all.sh
 delete_vars=$(cat <<EOF
@@ -381,6 +380,8 @@ if [ -f delete-all.sh ]; then
 else
     echo "$delete_vars" > delete-all.sh
 fi
+
+chmod +x delete-all.sh
 
 echo ""
 echo "All resource variables have been prepended to delete-all.sh for future cleanup automation."
