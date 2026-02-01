@@ -548,3 +548,32 @@ chmod +x delete-all.sh
 
 echo ""
 echo "All resource variables have been prepended to delete-all.sh for future cleanup automation."
+
+# copy add-new-service.sh from the parent directory and prepend constants
+echo "Preparing add-new-service.sh for adding future services..."
+cp ../add-new-service.sh .
+
+add_new_service_vars=$(cat <<EOF
+#!/bin/bash
+project_name="$project_name"
+lowercase_project_name="$lowercase_project_name"
+camel_case_project_name="$camel_case_project_name"
+API_GATEWAY_POLICY_NAME="$api_gateway_policy_name"
+AWS_REGION="$AWS_REGION"
+IAM_ROLE_NAME="$iam_role"
+EOF
+)
+
+if [ -f add-new-service.sh ]; then
+    tmpfile=$(mktemp)
+    echo "$add_new_service_vars" > "$tmpfile"
+    cat add-new-service.sh >> "$tmpfile"
+    mv "$tmpfile" add-new-service.sh
+else
+    echo "$add_new_service_vars" > add-new-service.sh
+fi
+
+chmod +x add-new-service.sh
+
+echo ""
+echo "Constants (project_name, IAM_ROLE_NAME, API_GATEWAY_POLICY_NAME, AWS_REGION, etc.) have been prepended to add-new-service.sh."
