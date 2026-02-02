@@ -169,6 +169,7 @@ require_var camel_case_project_name
 require_var API_GATEWAY_POLICY_NAME
 require_var AWS_REGION
 require_var IAM_ROLE_NAME
+require_var dist_domain
 echo "  All required variables present."
 echo ""
 
@@ -232,15 +233,16 @@ cd "$service_name" || exit
 
 echo "Replacing template placeholders (Appname, appname, region)..."
 # shellcheck disable=SC2154
-find . -type f -exec sed -i "s/Appname/$camel_case_project_name/g" {} +
-find . -type f -exec sed -i "s/appname/$lowercase_project_name/g" {} +
-find . -type f -exec sed -i "s/us-east-1/$AWS_REGION/g" {} +
+find . -type f -exec sed -i "s|Appname|$camel_case_project_name|g" {} +
+find . -type f -exec sed -i "s|appname|$lowercase_project_name|g" {} +
+find . -type f -exec sed -i "s|us-east-1|$AWS_REGION|g" {} +
+find . -type f -exec sed -i "s|bananas|$lowercase_table_name|g" {} +
+find . -type f -exec sed -i "s|Bananas|$camel_case_table_name|g" {} +
+# shellcheck disable=SC2154
+find . -type f -exec sed -i "s|FRONTEND_URL|$dist_domain|g" {} +
+
 echo "  Done."
 echo ""
-
-## Replace table name in all files
-find . -type f -exec sed -i "s/bananas/$lowercase_table_name/g" {} +
-find . -type f -exec sed -i "s/Bananas/$camel_case_table_name/g" {} +
 
 echo "=== GitHub repository ==="
 visibility_options=("public" "private")

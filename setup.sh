@@ -561,6 +561,7 @@ camel_case_project_name="$camel_case_project_name"
 API_GATEWAY_POLICY_NAME="$api_gateway_policy_name"
 AWS_REGION="$AWS_REGION"
 IAM_ROLE_NAME="$iam_role"
+dist_domain="$dist_domain"
 EOF
 )
 
