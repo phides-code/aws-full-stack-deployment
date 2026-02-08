@@ -143,6 +143,14 @@ fi
 project_name="$1"
 echo "Project name: $project_name"
 
+# Prompt for table/entity name (used in service name and API path)
+read -p "Table name in singular (e.g. banana): " table_name
+require_nonempty "Table name" "$table_name"
+
+lowercase_table_name=$(echo "$table_name" | tr '[:upper:]' '[:lower:]')
+camelcase_table_name=$(echo "$table_name" | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) tolower(substr($i,2)); print}' OFS='')
+uppercase_table_name=$(echo "$table_name" | tr '[:lower:]' '[:upper:]')
+
 # Basic dependencies used throughout the script
 require_cmd aws
 require_cmd gh
@@ -161,7 +169,7 @@ require_cmd find
 # convert project name to 3 different formats
 lowercase_project_name=$(echo "$project_name" | tr '[:upper:]' '[:lower:]')
 camel_case_project_name=$(echo "$project_name" | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) tolower(substr($i,2)); print}' OFS='')
-service_name="${lowercase_project_name}-bananas-service"
+service_name="${lowercase_project_name}-${lowercase_table_name}s-service"
 echo "Service name: $service_name"
 
 ### setup aws secrets
@@ -231,6 +239,9 @@ find . -type f -exec sed -i "s/Appname/$camel_case_project_name/g" {} +
 find . -type f -exec sed -i "s/appname/$lowercase_project_name/g" {} +
 find . -type f -exec sed -i "s/us-east-1/$AWS_REGION/g" {} +
 
+find . -type f -exec sed -i "s/banana/$lowercase_table_name/g" {} +
+find . -type f -exec sed -i "s/Banana/$camelcase_table_name/g" {} +
+
 # create GitHub repo
 echo "Setting up GitHub repository..."
 # display a mini menu to prompt for GitHub repo visibility
@@ -284,7 +295,7 @@ get_api_gateway_id() {
 }
 api_gateway_id="$(retry_nonempty 30 10 get_api_gateway_id || true)"
 require_nonempty "API Gateway ID (from API Gateway named: ${service_name})" "$api_gateway_id"
-service_url="https://$api_gateway_id.execute-api.$AWS_REGION.amazonaws.com/Prod/bananas"
+service_url="https://${api_gateway_id}.execute-api.${AWS_REGION}.amazonaws.com/Prod/${lowercase_table_name}s"
 echo "Service URL: $service_url"
 
 # Create identity pool
@@ -347,6 +358,7 @@ api_gateway_policy_name="$camel_case_project_name"APIGatewayPolicy
 cp ../../json-files/api-gateway-policy.json .
 sed -i "s/API_GATEWAY_ID/$api_gateway_id/g" api-gateway-policy.json
 sed -i "s/AWS_ACCOUNT_ID/$AWS_ACCOUNT_ID/g" api-gateway-policy.json
+sed -i "s/banana/$lowercase_table_name/g" api-gateway-policy.json
 
 aws iam put-role-policy \
     --role-name "$iam_role" \
@@ -371,9 +383,22 @@ npx degit phides-code/react-s3-template-app "$lowercase_project_name"-frontend
 # Move into the frontend folder
 cd "$lowercase_project_name"-frontend || exit
 
-# Replace appname in frontend files
+# Replace appname and table_name in frontend files
 echo "Replacing template variables in frontend files..."
 find . -type f -exec sed -i "s/appname/$lowercase_project_name/g" {} +
+
+find . -type f -exec sed -i "s/banana/$lowercase_table_name/g" {} +
+find . -type f -exec sed -i "s/Banana/$camelcase_table_name/g" {} +
+find . -type f -exec sed -i "s/BANANA/$uppercase_table_name/g" {} +
+
+mv src/features/bananas/AddBanana.tsx src/features/bananas/Add"$camelcase_table_name".tsx
+mv src/features/bananas/BananaHeader.tsx src/features/bananas/"$camelcase_table_name"Header.tsx
+mv src/features/bananas/BananaListItem.tsx src/features/bananas/"$camelcase_table_name"ListItem.tsx
+mv src/features/bananas/bananasApiSlice.ts src/features/bananas/"$lowercase_table_name"sApiSlice.ts
+mv src/features/bananas/Bananas.tsx src/features/bananas/"$camelcase_table_name"s.tsx
+mv src/features/bananas/ListBananas.tsx src/features/bananas/List"$camelcase_table_name"s.tsx
+mv src/features/bananas/ViewBanana.tsx src/features/bananas/View"$camelcase_table_name".tsx
+mv src/features/bananas src/features/"$lowercase_table_name"s
 
 ### Generate random ID for CloudFront CallerReference and S3 bucket name
 random_id=$(head -c 64 /dev/urandom | md5sum | awk '{print $1}')
@@ -450,13 +475,13 @@ gh secret set AWS_SECRET_ACCESS_KEY --body "$AWS_SECRET_ACCESS_KEY"
 gh secret set AWS_REGION --body "$AWS_REGION"
 gh secret set AWS_S3_BUCKET --body "$bucket_name"
 gh secret set AWS_DISTRIBUTION --body "$distribution_id"
-gh secret set BANANAS_SERVICE_URL --body "$service_url"
+gh secret set "$uppercase_table_name"S_SERVICE_URL --body "$service_url"
 gh secret set IDENTITY_POOL_ID --body "$identity_pool_id"
 
 # Create local .env file for frontend
 echo "Creating local .env file for frontend..."
 cat <<EOF > .env
-VITE_BANANAS_SERVICE_URL=$service_url
+VITE_${uppercase_table_name}S_SERVICE_URL=$service_url
 VITE_IDENTITY_POOL_ID=$identity_pool_id
 VITE_AWS_REGION=$AWS_REGION
 EOF

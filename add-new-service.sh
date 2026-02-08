@@ -156,7 +156,7 @@ fi
 
 table_name="$1"
 lowercase_table_name=$(echo "$table_name" | tr '[:upper:]' '[:lower:]')
-camel_case_table_name=$(echo "$table_name" | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) tolower(substr($i,2)); print}' OFS='')
+camelcase_table_name=$(echo "$table_name" | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) tolower(substr($i,2)); print}' OFS='')
 
 echo ""
 echo "=== Add new service: $lowercase_table_name ==="
@@ -237,7 +237,7 @@ find . -type f -exec sed -i "s|Appname|$camel_case_project_name|g" {} +
 find . -type f -exec sed -i "s|appname|$lowercase_project_name|g" {} +
 find . -type f -exec sed -i "s|us-east-1|$AWS_REGION|g" {} +
 find . -type f -exec sed -i "s|bananas|$lowercase_table_name|g" {} +
-find . -type f -exec sed -i "s|Bananas|$camel_case_table_name|g" {} +
+find . -type f -exec sed -i "s|Bananas|$camelcase_table_name|g" {} +
 # shellcheck disable=SC2154
 find . -type f -exec sed -i "s|FRONTEND_URL|$dist_domain|g" {} +
 
