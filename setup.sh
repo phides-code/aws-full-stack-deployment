@@ -275,102 +275,6 @@ echo "Adding AWS secrets to GitHub repo..."
 gh secret set AWS_ACCESS_KEY_ID --body "$AWS_ACCESS_KEY_ID"
 gh secret set AWS_SECRET_ACCESS_KEY --body "$AWS_SECRET_ACCESS_KEY"
 
-# commit and push changes
-echo "Committing and pushing initial code to GitHub..."
-git add .
-git commit -m "initial commit"
-git push origin main
-
-# watch the progress of the GitHub Actions workflow
-echo "Watching GitHub Actions workflow..."
-backend_sha="$(git rev-parse HEAD)"
-gh_watch_last_run_no_prompt "$backend_sha"
-
-# get the api gateway id and the url for the service
-echo "Fetching API Gateway ID..."
-get_api_gateway_id() {
-    aws apigateway get-rest-apis --output json \
-        | jq -r --arg service "$service_name" '.items[]? | select(.name == $service) | .id' \
-        | head -n 1
-}
-api_gateway_id="$(retry_nonempty 30 10 get_api_gateway_id || true)"
-require_nonempty "API Gateway ID (from API Gateway named: ${service_name})" "$api_gateway_id"
-service_url="https://${api_gateway_id}.execute-api.${AWS_REGION}.amazonaws.com/Prod/${lowercase_table_name}s"
-echo "Service URL: $service_url"
-
-# Create identity pool
-echo "=== Creating Cognito Identity Pool ==="
-identity_pool_id=$(aws cognito-identity create-identity-pool \
-    --identity-pool-name "$camel_case_project_name"IdentityPool \
-    --allow-unauthenticated-identities \
-    --no-allow-classic-flow | jq -r '.IdentityPoolId')
-require_nonempty "Cognito Identity Pool ID" "$identity_pool_id"
-echo "Created Cognito Identity Pool with ID: $identity_pool_id"
-
-# Create unauthenticated trust policy
-echo "=== Preparing unauthenticated trust policy JSON ==="
-cp ../../json-files/unauth-trust-policy.json .
-sed -i "s/IDENTITY_POOL_ID/$identity_pool_id/g" unauth-trust-policy.json
-echo "Updated unauth-trust-policy.json with Identity Pool ID."
-
-# Attach the unauthenticated trust policy to a new role
-iam_role="$camel_case_project_name"IAMRole
-echo "=== Creating IAM role for unauthenticated Cognito access: $iam_role ==="
-role_create_response=$(aws iam create-role \
-    --role-name "$iam_role" \
-    --assume-role-policy-document file://unauth-trust-policy.json)
-role_arn=$(echo "$role_create_response" | jq -r '.Role.Arn')
-require_nonempty "IAM Role ARN" "$role_arn"
-echo "Created IAM Role: $iam_role"
-echo "Role ARN: $role_arn"
-
-# Link the role to the identity pool
-echo "=== Linking IAM role to Cognito Identity Pool ==="
-aws cognito-identity set-identity-pool-roles \
-    --identity-pool-id "$identity_pool_id" \
-    --roles unauthenticated="$role_arn"
-echo "Linked $iam_role to Identity Pool $identity_pool_id"
-
-# Create unauth credentials policy
-echo "=== Creating unauthenticated credentials policy JSON ==="
-cp ../../json-files/unauth-credentials-policy.json .
-unauth_creds_policy="$camel_case_project_name"GetCredentialsPolicy
-
-echo "=== Creating managed IAM policy for unauthenticated Cognito credentials: $unauth_creds_policy ==="
-policy_create_response=$(aws iam create-policy \
-    --policy-name "$unauth_creds_policy" \
-    --policy-document file://unauth-credentials-policy.json)
-policy_arn=$(echo "$policy_create_response" | jq -r '.Policy.Arn')
-require_nonempty "Unauth credentials policy ARN" "$policy_arn"
-echo "Created IAM Policy: $unauth_creds_policy"
-echo "Policy ARN: $policy_arn"
-
-# Attach the unauthenticated policy to the role
-echo "=== Attaching credentials policy to IAM role ==="
-aws iam attach-role-policy \
-    --role-name "$iam_role" \
-    --policy-arn "$policy_arn"
-echo "Attached policy $unauth_creds_policy ($policy_arn) to role $iam_role"
-
-# Create and attach policy for api gateway access
-echo "=== Creating and attaching policy for API Gateway access ==="
-api_gateway_policy_name="$camel_case_project_name"APIGatewayPolicy
-cp ../../json-files/api-gateway-policy.json .
-sed -i "s/API_GATEWAY_ID/$api_gateway_id/g" api-gateway-policy.json
-sed -i "s/AWS_ACCOUNT_ID/$AWS_ACCOUNT_ID/g" api-gateway-policy.json
-sed -i "s/banana/$lowercase_table_name/g" api-gateway-policy.json
-
-aws iam put-role-policy \
-    --role-name "$iam_role" \
-    --policy-name "$api_gateway_policy_name" \
-    --policy-document file://api-gateway-policy.json
-
-# Remove the temporary files
-echo "Cleaning up temporary policy files..."
-rm unauth-trust-policy.json
-rm unauth-credentials-policy.json
-rm api-gateway-policy.json
-
 ###
 ### FRONTEND SETUP
 ###
@@ -462,6 +366,112 @@ rm my-dist-config.json
 rm s3-policy.json
 rm oac-config.json
 
+# go back to the backend directory to set frontend origin and perform initial commit
+cd ../"$service_name" || exit
+
+# setup distribution url as origin in backend
+echo "Setting CloudFront distribution as frontend origin in backend..."
+find . -maxdepth 1 -type f -exec sed -i "s|FRONTEND_URL|$dist_domain|g" {} +
+
+# commit and push backend changes (including frontend origin) to GitHub
+echo "Committing and pushing backend code to GitHub..."
+git add .
+git commit -m "initial commit"
+git push origin main
+
+# watch the progress of the backend GitHub Actions workflow
+echo "Watching GitHub Actions workflow..."
+backend_sha="$(git rev-parse HEAD)"
+gh_watch_last_run_no_prompt "$backend_sha"
+
+# After backend deployment is complete, fetch the API Gateway ID and service URL
+echo "Fetching API Gateway ID..."
+get_api_gateway_id() {
+    aws apigateway get-rest-apis --output json \
+        | jq -r --arg service "$service_name" '.items[]? | select(.name == $service) | .id' \
+        | head -n 1
+}
+api_gateway_id="$(retry_nonempty 30 10 get_api_gateway_id || true)"
+require_nonempty "API Gateway ID (from API Gateway named: ${service_name})" "$api_gateway_id"
+service_url="https://${api_gateway_id}.execute-api.${AWS_REGION}.amazonaws.com/Prod/${lowercase_table_name}s"
+echo "Service URL: $service_url"
+
+# Create identity pool
+echo "=== Creating Cognito Identity Pool ==="
+identity_pool_id=$(aws cognito-identity create-identity-pool \
+    --identity-pool-name "$camel_case_project_name"IdentityPool \
+    --allow-unauthenticated-identities \
+    --no-allow-classic-flow | jq -r '.IdentityPoolId')
+require_nonempty "Cognito Identity Pool ID" "$identity_pool_id"
+echo "Created Cognito Identity Pool with ID: $identity_pool_id"
+
+# Create unauthenticated trust policy
+echo "=== Preparing unauthenticated trust policy JSON ==="
+cp ../../json-files/unauth-trust-policy.json .
+sed -i "s/IDENTITY_POOL_ID/$identity_pool_id/g" unauth-trust-policy.json
+echo "Updated unauth-trust-policy.json with Identity Pool ID."
+
+# Attach the unauthenticated trust policy to a new role
+iam_role="$camel_case_project_name"IAMRole
+echo "=== Creating IAM role for unauthenticated Cognito access: $iam_role ==="
+role_create_response=$(aws iam create-role \
+    --role-name "$iam_role" \
+    --assume-role-policy-document file://unauth-trust-policy.json)
+role_arn=$(echo "$role_create_response" | jq -r '.Role.Arn')
+require_nonempty "IAM Role ARN" "$role_arn"
+echo "Created IAM Role: $iam_role"
+echo "Role ARN: $role_arn"
+
+# Link the role to the identity pool
+echo "=== Linking IAM role to Cognito Identity Pool ==="
+aws cognito-identity set-identity-pool-roles \
+    --identity-pool-id "$identity_pool_id" \
+    --roles unauthenticated="$role_arn"
+echo "Linked $iam_role to Identity Pool $identity_pool_id"
+
+# Create unauth credentials policy
+echo "=== Creating unauthenticated credentials policy JSON ==="
+cp ../../json-files/unauth-credentials-policy.json .
+unauth_creds_policy="$camel_case_project_name"GetCredentialsPolicy
+
+echo "=== Creating managed IAM policy for unauthenticated Cognito credentials: $unauth_creds_policy ==="
+policy_create_response=$(aws iam create-policy \
+    --policy-name "$unauth_creds_policy" \
+    --policy-document file://unauth-credentials-policy.json)
+policy_arn=$(echo "$policy_create_response" | jq -r '.Policy.Arn')
+require_nonempty "Unauth credentials policy ARN" "$policy_arn"
+echo "Created IAM Policy: $unauth_creds_policy"
+echo "Policy ARN: $policy_arn"
+
+# Attach the unauthenticated policy to the role
+echo "=== Attaching credentials policy to IAM role ==="
+aws iam attach-role-policy \
+    --role-name "$iam_role" \
+    --policy-arn "$policy_arn"
+echo "Attached policy $unauth_creds_policy ($policy_arn) to role $iam_role"
+
+# Create and attach policy for api gateway access
+echo "=== Creating and attaching policy for API Gateway access ==="
+api_gateway_policy_name="$camel_case_project_name"APIGatewayPolicy
+cp ../../json-files/api-gateway-policy.json .
+sed -i "s/API_GATEWAY_ID/$api_gateway_id/g" api-gateway-policy.json
+sed -i "s/AWS_ACCOUNT_ID/$AWS_ACCOUNT_ID/g" api-gateway-policy.json
+sed -i "s/banana/$lowercase_table_name/g" api-gateway-policy.json
+
+aws iam put-role-policy \
+    --role-name "$iam_role" \
+    --policy-name "$api_gateway_policy_name" \
+    --policy-document file://api-gateway-policy.json
+
+# Remove the temporary files
+echo "Cleaning up temporary policy files..."
+rm unauth-trust-policy.json
+rm unauth-credentials-policy.json
+rm api-gateway-policy.json
+
+# return to the frontend directory to set up its repo and initial commit
+cd ../"$lowercase_project_name"-frontend || exit
+
 # Create GitHub repo for frontend
 echo "=== Creating GitHub repo for frontend ==="
 git init
@@ -492,22 +502,12 @@ git add .
 git commit -m "initial commit"
 git push origin main
 
-# go back to the backend directory
-cd ../"$service_name" || exit
-
-# setup distribution url as origin in backend
-echo "Setting CloudFront distribution as frontend origin in backend..."
-find . -maxdepth 1 -type f -exec sed -i "s|FRONTEND_URL|$dist_domain|g" {} +
-
-# commit and push changes to backend repo
-git add .
-git commit -m "Set CloudFront distribution as frontend origin"
-git push origin main
-
-# watch the progress of the GitHub Actions workflow
+# watch the progress of the frontend GitHub Actions workflow
 echo "Watching GitHub Actions workflow..."
-backend_sha="$(git rev-parse HEAD)"
-gh_watch_last_run_no_prompt "$backend_sha"
+frontend_sha="$(git rev-parse HEAD)"
+gh_watch_last_run_no_prompt "$frontend_sha"
+
+
 
 ### wrap up message
 echo ""
