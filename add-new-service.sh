@@ -150,7 +150,7 @@ gh_watch_last_run_no_prompt() {
 # --- Main ---
 
 if [ "$#" -ne 1 ]; then
-    echo "Usage: add-new-service.sh TABLE_NAME"
+    echo "Usage: add-new-service.sh TABLE_NAME (singular, e.g. banana)"
     exit 1
 fi
 
@@ -166,10 +166,9 @@ echo "Checking prepended constants (project_name, IAM_ROLE_NAME, etc.)..."
 require_var project_name
 require_var lowercase_project_name
 require_var camel_case_project_name
-require_var API_GATEWAY_POLICY_NAME
 require_var AWS_REGION
-require_var IAM_ROLE_NAME
 require_var dist_domain
+require_var distribution_id
 echo "  All required variables present."
 echo ""
 
@@ -190,9 +189,9 @@ require_cmd find
 echo "  All required commands found."
 echo ""
 
-# Prepended by setup.sh: project_name, lowercase_project_name, camel_case_project_name
+# Prepended by setup.sh: project_name, lowercase_project_name, camel_case_project_name, AWS_REGION, dist_domain, distribution_id
 # shellcheck disable=SC2154
-service_name="${lowercase_project_name}-${lowercase_table_name}-service"
+service_name="${lowercase_project_name}-${lowercase_table_name}s-service"
 # shellcheck disable=SC2154
 echo "Project: $project_name  →  service repo: $service_name"
 echo ""
@@ -231,15 +230,17 @@ npx degit phides-code/go-dynamodb-service-template "$service_name"
 
 cd "$service_name" || exit
 
-echo "Replacing template placeholders (Appname, appname, region)..."
+echo "Replacing template placeholders (Appname, appname, region, table name, FRONTEND_URL)..."
 # shellcheck disable=SC2154
 find . -type f -exec sed -i "s|Appname|$camel_case_project_name|g" {} +
 find . -type f -exec sed -i "s|appname|$lowercase_project_name|g" {} +
 find . -type f -exec sed -i "s|us-east-1|$AWS_REGION|g" {} +
-find . -type f -exec sed -i "s|bananas|$lowercase_table_name|g" {} +
-find . -type f -exec sed -i "s|Bananas|$camelcase_table_name|g" {} +
+find . -type f -exec sed -i "s|banana|$lowercase_table_name|g" {} +
+find . -type f -exec sed -i "s|Banana|$camelcase_table_name|g" {} +
+find . -type f -exec sed -i "s|bananas|${lowercase_table_name}s|g" {} +
+find . -type f -exec sed -i "s|Bananas|${camelcase_table_name}s|g" {} +
 # shellcheck disable=SC2154
-find . -type f -exec sed -i "s|FRONTEND_URL|$dist_domain|g" {} +
+find . -maxdepth 1 -type f -exec sed -i "s|FRONTEND_URL|$dist_domain|g" {} +
 
 echo "  Done."
 echo ""
@@ -269,9 +270,11 @@ git init
 git branch -M main
 gh_repo_create_with_retry "$service_name" "$selected_visibility" "."
 
-echo "Adding AWS secrets to the repo..."
+echo "Generating AWS_CF_TOKEN and adding secrets to the repo..."
+AWS_CF_TOKEN=$(head -c 64 /dev/urandom | md5sum | awk '{print $1}')
 gh secret set AWS_ACCESS_KEY_ID --body "$AWS_ACCESS_KEY_ID"
 gh secret set AWS_SECRET_ACCESS_KEY --body "$AWS_SECRET_ACCESS_KEY"
+gh secret set AWS_CF_TOKEN --body "$AWS_CF_TOKEN"
 
 echo "Pushing initial commit to main..."
 git add .
@@ -286,36 +289,33 @@ gh_watch_last_run_no_prompt "$backend_sha"
 echo "  Workflow completed."
 echo ""
 
-echo "=== API Gateway and IAM policy ==="
+echo "=== API Gateway, CloudFront, and IAM policy ==="
 echo "Resolving API Gateway ID for: $service_name"
 api_gateway_id="$(retry_nonempty 30 10 get_api_gateway_id || true)"
 require_nonempty "API Gateway ID (from API named: ${service_name})" "$api_gateway_id"
-service_url="https://$api_gateway_id.execute-api.$AWS_REGION.amazonaws.com/Prod/$lowercase_table_name"
+service_url_host="${api_gateway_id}.execute-api.${AWS_REGION}.amazonaws.com"
+service_url="${dist_domain}/Prod/${lowercase_table_name}s"
 echo "  API Gateway ID: $api_gateway_id"
-echo "  Service URL: $service_url"
+echo "  Service URL (via CloudFront): $service_url"
 echo ""
 
-echo "Updating IAM role policy to allow invoke for: $lowercase_table_name"
-current_policy_file="current-apigateway-policy.json"
-aws iam get-role-policy --role-name "$IAM_ROLE_NAME" --policy-name "$API_GATEWAY_POLICY_NAME" --output json > "$current_policy_file"
-echo "  Fetched current policy → $current_policy_file"
-
-updated_policy_file="updated-policy.json"
-jq --arg region "$AWS_REGION" --arg account "$AWS_ACCOUNT_ID" --arg api_id "$api_gateway_id" --arg table "$lowercase_table_name" '
-  .PolicyDocument
-  | .Statement[0].Resource += [
-      "arn:aws:execute-api:\($region):\($account):\($api_id)/*/OPTIONS/\($table)",
-      "arn:aws:execute-api:\($region):\($account):\($api_id)/*/GET/\($table)",
-      "arn:aws:execute-api:\($region):\($account):\($api_id)/*/POST/\($table)",
-      "arn:aws:execute-api:\($region):\($account):\($api_id)/*/OPTIONS/\($table)/*",
-      "arn:aws:execute-api:\($region):\($account):\($api_id)/*/GET/\($table)/*",
-      "arn:aws:execute-api:\($region):\($account):\($api_id)/*/PUT/\($table)/*",
-      "arn:aws:execute-api:\($region):\($account):\($api_id)/*/DELETE/\($table)/*"
-    ]
-' "$current_policy_file" > "$updated_policy_file"
-echo "  Built updated policy (existing + 7 resources for $lowercase_table_name) → $updated_policy_file"
-
-echo "Applying updated inline policy to role: ${IAM_ROLE_NAME}"
-aws iam put-role-policy --role-name "$IAM_ROLE_NAME" --policy-name "$API_GATEWAY_POLICY_NAME" --policy-document file://updated-policy.json
+echo "Adding API origin and cache behavior to CloudFront distribution..."
+export AWS_PAGER=""
+cf_config=$(mktemp)
+cf_updated=$(mktemp)
+cf_fragment=$(mktemp)
+trap 'rm -f "$cf_config" "$cf_updated" "$cf_fragment"' EXIT
+# shellcheck disable=SC2154
+aws cloudfront get-distribution-config --id "$distribution_id" --query 'DistributionConfig' > "$cf_config"
+cf_etag=$(aws cloudfront get-distribution-config --id "$distribution_id" --query 'ETag' --output text)
+require_nonempty "CloudFront distribution ETag" "$cf_etag"
+cp ../api-origin-behavior.json "$cf_fragment"
+sed -i "s|ORIGIN_ID|$service_url_host|g" "$cf_fragment"
+sed -i "s|CF_TOKEN|$AWS_CF_TOKEN|g" "$cf_fragment"
+sed -i "s|PATH_PATTERN|/Prod/${lowercase_table_name}s*|g" "$cf_fragment"
+jq -s '.[1] as $frag | .[0] | .Origins.Quantity += 1 | .Origins.Items += [$frag.origin] | .CacheBehaviors.Quantity += ($frag.cacheBehaviors.Quantity) | .CacheBehaviors.Items += ($frag.cacheBehaviors.Items)' "$cf_config" "$cf_fragment" > "$cf_updated"
+aws cloudfront update-distribution --id "$distribution_id" --distribution-config "file://${cf_updated}" --if-match "$cf_etag"
+echo "  CloudFront distribution update initiated (API origin and /Prod/${lowercase_table_name}s behavior). Deployment may take 5–15 minutes."
 echo ""
-echo "Done. New service \"$lowercase_table_name\" is wired up; IAM policy updated."
+
+echo "Done. New service \"$lowercase_table_name\" is wired up."

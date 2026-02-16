@@ -38,7 +38,7 @@ wait_until() {
     local interval="$2"
     local desc="$3"
     shift 3
-
+    
     local deadline=$((SECONDS + timeout))
     while true; do
         if "$@"; then
@@ -54,7 +54,7 @@ wait_until() {
 cloudfront_is_deployed_and_disabled() {
     local id="$1"
     local status enabled
-
+    
     status="$(aws cloudfront get-distribution --id "$id" | jq -r '.Distribution.Status')"
     enabled="$(aws cloudfront get-distribution --id "$id" | jq -r '.Distribution.DistributionConfig.Enabled')"
     echo "Current status: $status, Enabled: $enabled"
@@ -85,10 +85,6 @@ require_cmd mktemp
 require_var PROJECT_NAME
 require_var SERVICE_NAME
 require_var AWS_REGION
-require_var COGNITO_IDENTITY_POOL_ID
-require_var IAM_ROLE_NAME
-require_var UNAUTH_CREDENTIALS_POLICY_ARN
-require_var API_GATEWAY_POLICY_NAME
 require_var S3_BUCKET_NAME
 require_var CLOUDFRONT_DISTRIBUTION_ID
 require_var CLOUDFRONT_OAC_ID
@@ -104,33 +100,33 @@ if aws cloudfront get-distribution-config --id "$CLOUDFRONT_DISTRIBUTION_ID" > "
         die "Failed to read CloudFront distribution ETag"
     fi
     echo "ETag: $ETAG"
-
+    
     enabled="$(jq -r '.DistributionConfig.Enabled' "$cfg")"
     echo "Current Enabled: $enabled"
-
+    
     if [ "$enabled" = "true" ]; then
         echo "Disabling CloudFront distribution..."
         disabled_cfg="$(mktemp)"
         jq '.DistributionConfig | .Enabled = false' "$cfg" > "$disabled_cfg"
         aws cloudfront update-distribution \
-            --id "$CLOUDFRONT_DISTRIBUTION_ID" \
-            --distribution-config "file://${disabled_cfg}" \
-            --if-match "$ETAG"
+        --id "$CLOUDFRONT_DISTRIBUTION_ID" \
+        --distribution-config "file://${disabled_cfg}" \
+        --if-match "$ETAG"
         rm -f "$disabled_cfg"
     else
         echo "Distribution already disabled (or disabling)."
     fi
-
+    
     echo "Waiting for CloudFront distribution to be fully disabled..."
     wait_until 7200 10 "CloudFront distribution to become Deployed+Disabled" cloudfront_is_deployed_and_disabled "$CLOUDFRONT_DISTRIBUTION_ID"
-
+    
     echo "Deleting CloudFront distribution..."
     LATEST_ETAG="$(aws cloudfront get-distribution-config --id "$CLOUDFRONT_DISTRIBUTION_ID" | jq -r '.ETag')"
     if [ -z "$LATEST_ETAG" ] || [ "$LATEST_ETAG" = "null" ]; then
         die "Failed to fetch latest CloudFront distribution ETag"
     fi
     aws cloudfront delete-distribution --id "$CLOUDFRONT_DISTRIBUTION_ID" --if-match "$LATEST_ETAG"
-
+    
     echo "Waiting for CloudFront distribution to be deleted..."
     wait_until 7200 15 "CloudFront distribution deletion" cloudfront_is_deleted "$CLOUDFRONT_DISTRIBUTION_ID"
 else
@@ -195,28 +191,6 @@ fi
 gh repo delete "$backend_repo" --yes
 
 cd ..
-
-echo "=== Deleting Cognito Identity Pool ==="
-if aws cognito-identity describe-identity-pool --identity-pool-id "$COGNITO_IDENTITY_POOL_ID" >/dev/null 2>&1; then
-    aws cognito-identity delete-identity-pool --identity-pool-id "$COGNITO_IDENTITY_POOL_ID"
-else
-    echo "Cognito Identity Pool not found; skipping."
-fi
-
-echo "=== Detaching and deleting IAM policies and role ==="
-if aws iam get-role --role-name "$IAM_ROLE_NAME" >/dev/null 2>&1; then
-    if aws iam get-policy --policy-arn "$UNAUTH_CREDENTIALS_POLICY_ARN" >/dev/null 2>&1; then
-        aws iam detach-role-policy --role-name "$IAM_ROLE_NAME" --policy-arn "$UNAUTH_CREDENTIALS_POLICY_ARN" || true
-        aws iam delete-policy --policy-arn "$UNAUTH_CREDENTIALS_POLICY_ARN"
-    else
-        echo "Managed IAM policy not found; skipping policy deletion."
-    fi
-
-    aws iam delete-role-policy --role-name "$IAM_ROLE_NAME" --policy-name "$API_GATEWAY_POLICY_NAME" || true
-    aws iam delete-role --role-name "$IAM_ROLE_NAME"
-else
-    echo "IAM role not found; skipping IAM cleanup."
-fi
 
 echo "=== All resources deleted ==="
 

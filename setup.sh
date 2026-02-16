@@ -133,23 +133,18 @@ gh_watch_last_run_no_prompt() {
 
 echo "=== AWS Full Stack Project Setup ==="
 
-# Check if the user provided one argument
-if [ "$#" -ne 1 ]; then
-    echo "Usage: setup.sh PROJECT_NAME"
+# Check if the user provided two arguments
+if [ "$#" -ne 2 ]; then
+    echo "Usage: setup.sh PROJECT_NAME TABLE_NAME"
+    echo "  TABLE_NAME: singular entity name (e.g. banana)"
     exit 1
 fi
 
-# Assign the argument to a variable
+# Assign the arguments to variables
 project_name="$1"
+table_name="$2"
 echo "Project name: $project_name"
-
-# Prompt for table/entity name (used in service name and API path)
-read -p "Table name in singular (e.g. banana): " table_name
-require_nonempty "Table name" "$table_name"
-
-lowercase_table_name=$(echo "$table_name" | tr '[:upper:]' '[:lower:]')
-camelcase_table_name=$(echo "$table_name" | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) tolower(substr($i,2)); print}' OFS='')
-uppercase_table_name=$(echo "$table_name" | tr '[:lower:]' '[:upper:]')
+echo "Table name: $table_name"
 
 # Basic dependencies used throughout the script
 require_cmd aws
@@ -166,10 +161,14 @@ require_cmd md5sum
 require_cmd mktemp
 require_cmd find
 
-# convert project name to 3 different formats
+# convert project name and table name to 3 different formats
+lowercase_table_name=$(echo "$table_name" | tr '[:upper:]' '[:lower:]')
+camelcase_table_name=$(echo "$table_name" | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) tolower(substr($i,2)); print}' OFS='')
+uppercase_table_name=$(echo "$table_name" | tr '[:lower:]' '[:upper:]')
 lowercase_project_name=$(echo "$project_name" | tr '[:upper:]' '[:lower:]')
 camel_case_project_name=$(echo "$project_name" | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) tolower(substr($i,2)); print}' OFS='')
 service_name="${lowercase_project_name}-${lowercase_table_name}s-service"
+
 echo "Service name: $service_name"
 
 ### setup aws secrets
@@ -270,10 +269,14 @@ git init
 git branch -M main
 gh_repo_create_with_retry "$service_name" "$selected_visibility" "."
 
+# Generate and save a random AWS_CF_TOKEN token
+AWS_CF_TOKEN=$(head -c 64 /dev/urandom | md5sum | awk '{print $1}')
+
 # setup AWS secrets in GitHub
 echo "Adding AWS secrets to GitHub repo..."
 gh secret set AWS_ACCESS_KEY_ID --body "$AWS_ACCESS_KEY_ID"
 gh secret set AWS_SECRET_ACCESS_KEY --body "$AWS_SECRET_ACCESS_KEY"
+gh secret set AWS_CF_TOKEN --body "$AWS_CF_TOKEN"
 
 ###
 ### FRONTEND SETUP
@@ -290,7 +293,6 @@ cd "$lowercase_project_name"-frontend || exit
 # Replace appname and table_name in frontend files
 echo "Replacing template variables in frontend files..."
 find . -type f -exec sed -i "s/appname/$lowercase_project_name/g" {} +
-
 find . -type f -exec sed -i "s/banana/$lowercase_table_name/g" {} +
 find . -type f -exec sed -i "s/Banana/$camelcase_table_name/g" {} +
 find . -type f -exec sed -i "s/BANANA/$uppercase_table_name/g" {} +
@@ -393,81 +395,27 @@ get_api_gateway_id() {
 }
 api_gateway_id="$(retry_nonempty 30 10 get_api_gateway_id || true)"
 require_nonempty "API Gateway ID (from API Gateway named: ${service_name})" "$api_gateway_id"
-service_url="https://${api_gateway_id}.execute-api.${AWS_REGION}.amazonaws.com/Prod/${lowercase_table_name}s"
+service_url_host="${api_gateway_id}.execute-api.${AWS_REGION}.amazonaws.com"
+service_url="${dist_domain}/Prod/${lowercase_table_name}s"
 echo "Service URL: $service_url"
 
-# Create identity pool
-echo "=== Creating Cognito Identity Pool ==="
-identity_pool_id=$(aws cognito-identity create-identity-pool \
-    --identity-pool-name "$camel_case_project_name"IdentityPool \
-    --allow-unauthenticated-identities \
-    --no-allow-classic-flow | jq -r '.IdentityPoolId')
-require_nonempty "Cognito Identity Pool ID" "$identity_pool_id"
-echo "Created Cognito Identity Pool with ID: $identity_pool_id"
-
-# Create unauthenticated trust policy
-echo "=== Preparing unauthenticated trust policy JSON ==="
-cp ../../json-files/unauth-trust-policy.json .
-sed -i "s/IDENTITY_POOL_ID/$identity_pool_id/g" unauth-trust-policy.json
-echo "Updated unauth-trust-policy.json with Identity Pool ID."
-
-# Attach the unauthenticated trust policy to a new role
-iam_role="$camel_case_project_name"IAMRole
-echo "=== Creating IAM role for unauthenticated Cognito access: $iam_role ==="
-role_create_response=$(aws iam create-role \
-    --role-name "$iam_role" \
-    --assume-role-policy-document file://unauth-trust-policy.json)
-role_arn=$(echo "$role_create_response" | jq -r '.Role.Arn')
-require_nonempty "IAM Role ARN" "$role_arn"
-echo "Created IAM Role: $iam_role"
-echo "Role ARN: $role_arn"
-
-# Link the role to the identity pool
-echo "=== Linking IAM role to Cognito Identity Pool ==="
-aws cognito-identity set-identity-pool-roles \
-    --identity-pool-id "$identity_pool_id" \
-    --roles unauthenticated="$role_arn"
-echo "Linked $iam_role to Identity Pool $identity_pool_id"
-
-# Create unauth credentials policy
-echo "=== Creating unauthenticated credentials policy JSON ==="
-cp ../../json-files/unauth-credentials-policy.json .
-unauth_creds_policy="$camel_case_project_name"GetCredentialsPolicy
-
-echo "=== Creating managed IAM policy for unauthenticated Cognito credentials: $unauth_creds_policy ==="
-policy_create_response=$(aws iam create-policy \
-    --policy-name "$unauth_creds_policy" \
-    --policy-document file://unauth-credentials-policy.json)
-policy_arn=$(echo "$policy_create_response" | jq -r '.Policy.Arn')
-require_nonempty "Unauth credentials policy ARN" "$policy_arn"
-echo "Created IAM Policy: $unauth_creds_policy"
-echo "Policy ARN: $policy_arn"
-
-# Attach the unauthenticated policy to the role
-echo "=== Attaching credentials policy to IAM role ==="
-aws iam attach-role-policy \
-    --role-name "$iam_role" \
-    --policy-arn "$policy_arn"
-echo "Attached policy $unauth_creds_policy ($policy_arn) to role $iam_role"
-
-# Create and attach policy for api gateway access
-echo "=== Creating and attaching policy for API Gateway access ==="
-api_gateway_policy_name="$camel_case_project_name"APIGatewayPolicy
-cp ../../json-files/api-gateway-policy.json .
-sed -i "s/API_GATEWAY_ID/$api_gateway_id/g" api-gateway-policy.json
-sed -i "s/AWS_ACCOUNT_ID/$AWS_ACCOUNT_ID/g" api-gateway-policy.json
-sed -i "s/banana/$lowercase_table_name/g" api-gateway-policy.json
-
-aws iam put-role-policy \
-    --role-name "$iam_role" \
-    --policy-name "$api_gateway_policy_name" \
-    --policy-document file://api-gateway-policy.json
-
-# Remove the temporary files
-echo "Cleaning up temporary policy files..."
-rm unauth-trust-policy.json
-rm unauth-credentials-policy.json
-rm api-gateway-policy.json
+# Add API as custom origin and /Prod/* behavior to CloudFront distribution
+echo "Adding API origin and cache behavior to CloudFront distribution..."
+export AWS_PAGER=""
+cf_config=$(mktemp)
+cf_updated=$(mktemp)
+cf_fragment=$(mktemp)
+trap 'rm -f "$cf_config" "$cf_updated" "$cf_fragment"' EXIT
+aws cloudfront get-distribution-config --id "$distribution_id" --query 'DistributionConfig' > "$cf_config"
+cf_etag=$(aws cloudfront get-distribution-config --id "$distribution_id" --query 'ETag' --output text)
+require_nonempty "CloudFront distribution ETag" "$cf_etag"
+cp ../../json-files/api-origin-behavior.json "$cf_fragment"
+sed -i "s|ORIGIN_ID|$service_url_host|g" "$cf_fragment"
+sed -i "s|CF_TOKEN|$AWS_CF_TOKEN|g" "$cf_fragment"
+sed -i "s|PATH_PATTERN|/Prod/${lowercase_table_name}s*|g" "$cf_fragment"
+jq -s '.[1] as $frag | .[0] | .Origins.Quantity += 1 | .Origins.Items += [$frag.origin] | .CacheBehaviors = $frag.cacheBehaviors' "$cf_config" "$cf_fragment" > "$cf_updated"
+aws cloudfront update-distribution --id "$distribution_id" --distribution-config "file://${cf_updated}" --if-match "$cf_etag"
+echo "CloudFront distribution update initiated (API origin and /Prod/* behavior). Deployment may take 5–15 minutes."
 
 # return to the frontend directory to set up its repo and initial commit
 cd ../"$lowercase_project_name"-frontend || exit
@@ -486,14 +434,11 @@ gh secret set AWS_REGION --body "$AWS_REGION"
 gh secret set AWS_S3_BUCKET --body "$bucket_name"
 gh secret set AWS_DISTRIBUTION --body "$distribution_id"
 gh secret set "$uppercase_table_name"S_SERVICE_URL --body "$service_url"
-gh secret set IDENTITY_POOL_ID --body "$identity_pool_id"
 
 # Create local .env file for frontend
 echo "Creating local .env file for frontend..."
 cat <<EOF > .env
 VITE_${uppercase_table_name}S_SERVICE_URL=$service_url
-VITE_IDENTITY_POOL_ID=$identity_pool_id
-VITE_AWS_REGION=$AWS_REGION
 EOF
 
 ### initial commit:
@@ -526,12 +471,6 @@ echo "Project name: $project_name"
 echo "Service name: $service_name"
 echo "API Gateway ID: $api_gateway_id"
 echo "Service URL: $service_url"
-echo "Cognito Identity Pool ID: $identity_pool_id"
-echo "IAM Role Name: $iam_role"
-echo "IAM Role ARN: $role_arn"
-echo "Unauthenticated Credentials Policy Name: $unauth_creds_policy"
-echo "Unauthenticated Credentials Policy ARN: $policy_arn"
-echo "API Gateway Policy Name: $api_gateway_policy_name"
 echo "S3 Bucket Name: $bucket_name"
 echo "CloudFront Distribution ID: $distribution_id"
 echo "CloudFront OAC ID: $oac_id"
@@ -549,10 +488,6 @@ delete_vars=$(cat <<EOF
 PROJECT_NAME="$project_name"
 SERVICE_NAME="$service_name"
 AWS_REGION="$AWS_REGION"
-COGNITO_IDENTITY_POOL_ID="$identity_pool_id"
-IAM_ROLE_NAME="$iam_role"
-UNAUTH_CREDENTIALS_POLICY_ARN="$policy_arn"
-API_GATEWAY_POLICY_NAME="$api_gateway_policy_name"
 S3_BUCKET_NAME="$bucket_name"
 CLOUDFRONT_DISTRIBUTION_ID="$distribution_id"
 CLOUDFRONT_OAC_ID="$oac_id"
@@ -583,10 +518,9 @@ add_new_service_vars=$(cat <<EOF
 project_name="$project_name"
 lowercase_project_name="$lowercase_project_name"
 camel_case_project_name="$camel_case_project_name"
-API_GATEWAY_POLICY_NAME="$api_gateway_policy_name"
 AWS_REGION="$AWS_REGION"
-IAM_ROLE_NAME="$iam_role"
 dist_domain="$dist_domain"
+distribution_id="$distribution_id"
 EOF
 )
 
@@ -601,5 +535,8 @@ fi
 
 chmod +x add-new-service.sh
 
+# Keep a copy of api-origin-behavior.json for new service if needed
+cp ../json-files/api-origin-behavior.json . 
+
 echo ""
-echo "Constants (project_name, IAM_ROLE_NAME, API_GATEWAY_POLICY_NAME, AWS_REGION, etc.) have been prepended to add-new-service.sh."
+echo "Constants (project_name, AWS_REGION, etc.) have been prepended to add-new-service.sh."
