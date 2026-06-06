@@ -30,6 +30,14 @@ require_nonempty() {
     fi
 }
 
+mv_if_different() {
+    local src="$1"
+    local dest="$2"
+    if [ "$src" != "$dest" ] && [ -e "$src" ]; then
+        mv "$src" "$dest"
+    fi
+}
+
 gh_repo_create_with_retry() {
     # usage: gh_repo_create_with_retry <repo_name> <visibility> [source_path]
     local repo_name="$1"
@@ -297,14 +305,14 @@ find . -type f -exec sed -i "s/banana/$lowercase_table_name/g" {} +
 find . -type f -exec sed -i "s/Banana/$camelcase_table_name/g" {} +
 find . -type f -exec sed -i "s/BANANA/$uppercase_table_name/g" {} +
 
-mv src/features/bananas/AddBanana.tsx src/features/bananas/Add"$camelcase_table_name".tsx
-mv src/features/bananas/BananaHeader.tsx src/features/bananas/"$camelcase_table_name"Header.tsx
-mv src/features/bananas/BananaListItem.tsx src/features/bananas/"$camelcase_table_name"ListItem.tsx
-mv src/features/bananas/bananasApiSlice.ts src/features/bananas/"$lowercase_table_name"sApiSlice.ts
-mv src/features/bananas/Bananas.tsx src/features/bananas/"$camelcase_table_name"s.tsx
-mv src/features/bananas/ListBananas.tsx src/features/bananas/List"$camelcase_table_name"s.tsx
-mv src/features/bananas/ViewBanana.tsx src/features/bananas/View"$camelcase_table_name".tsx
-mv src/features/bananas src/features/"$lowercase_table_name"s
+mv_if_different src/features/bananas/AddBanana.tsx src/features/bananas/Add"$camelcase_table_name".tsx
+mv_if_different src/features/bananas/BananaHeader.tsx src/features/bananas/"$camelcase_table_name"Header.tsx
+mv_if_different src/features/bananas/BananaListItem.tsx src/features/bananas/"$camelcase_table_name"ListItem.tsx
+mv_if_different src/features/bananas/bananasApiSlice.ts src/features/bananas/"$lowercase_table_name"sApiSlice.ts
+mv_if_different src/features/bananas/Bananas.tsx src/features/bananas/"$camelcase_table_name"s.tsx
+mv_if_different src/features/bananas/ListBananas.tsx src/features/bananas/List"$camelcase_table_name"s.tsx
+mv_if_different src/features/bananas/ViewBanana.tsx src/features/bananas/View"$camelcase_table_name".tsx
+mv_if_different src/features/bananas src/features/"$lowercase_table_name"s
 
 ### Generate random ID for CloudFront CallerReference and S3 bucket name
 random_id=$(head -c 64 /dev/urandom | md5sum | awk '{print $1}')
